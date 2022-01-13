@@ -1,0 +1,172 @@
+initscript {
+    ext {
+        salesforce = "http"
+        mavenPublic = "http"
+        mavenCentral = "http"
+        mavenSnapshots = "http"
+        mavenReleases = "http"
+        mavenCots = "http"
+        dockerRegistry = "http"
+        vulnerabilityDb = "http"
+        springBootVersion = "2.6.2"
+        mapstructVersion = "1.4.2.Final"
+        jacksonVersion = "2.11.2"
+        jUnitVersion = "5.7.1"
+        owaspVersion = "6.5.3"
+    }
+    
+    plugins {
+        id "org.owasp.dependencycheck" version owaspVersion
+        id "org.springframework.boot" version springBootVersion
+        id "jacoco"
+        id "org.sonarqube" version "3.3"
+        id "maven-publish"
+        id "checkstyle"
+        id "io.freefair.lombok" version "6.3.0"
+        id "com.bmuschko.docker-spring-boot-application"
+    }
+
+    apply plugin: "java"
+
+    repositories {
+        maven {
+            name "DOS CA Maven Repo"
+            url mavenReleases
+        }
+        maven {
+            name "DOS CA Maven Repo"
+            url mavenCentral
+
+        }
+
+        maven {
+            name "DOS CA Maven COTS Repo"
+            url mavenCots
+        }
+    }
+    dependencies {
+        implementation enforcedPlatform("org.springframework.boot:spring-boot-dependencies:${springVersion}")
+        implementation "org.springframework.boot:spring-boot-starter-actuator"
+        implementation "org.mapstruct:mapstruct:${mapStructVersion}"
+        annotationProcessor "org.mapstruct:mapstruct-processor:${mapStructVersion}"
+
+        testImplementation "org.junit.jupiter:junit-jupiter:${jUnitVersion}"
+        testImplementation("org.springframework.boot:spring-boot-starter-test")
+        testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
+
+
+        constraints {
+            implementation("org.apache.logging.log4j:log4j-core") {
+                version {
+                    strictly("[2.17, 3[")
+                    prefer("2.17.0")
+                }
+                because("Address CVE-2021-44228 and CVE-2021-45105")
+            }
+            implementation("org.apache.logging.log4j:log4j-api") {
+                version {
+                    strictly("[2.17, 3[")
+                    prefer("2.17.0")
+                }
+                because("Not strictly necessary to address CVE-2021-44228 and CVE-2021-45105 but not needed at runtime without log4j-core")
+            }
+        }
+    }
+
+    test {
+        useJUnitPlatform()
+        finalizedBy jacocoTestReport // report is always generated after tests run
+    }
+
+    jacocoTestReport {
+        dependsOn test // tests are required to run before generating the report
+    }
+
+    docker {
+        registryCredentials {
+            username = System.getenv('DOCKER_USERNAME')
+            password = System.getenv('DOCKER_PASSWORD')
+            email = System.getenv('DOCKER_REGISTRY_EMAIL')
+            url = dockerRegistry
+        }
+        springBootApplication {
+            baseImage = "openjdk:8-alpine"
+            ports = [9090, 8080]
+            images = ["csm/shared-resources/${project.name}:${project.version}"]
+            jvmArgs = ['-Xmx2048m']
+            maintainer = "CSM"
+        }
+    }
+
+
+    checkstyle {
+        showViolations = true
+        maxErrors = 1
+    }
+
+
+    tasks.withType(Checkstyle) {
+        reports {
+            xml.enabled false
+            html.enabled true
+        }
+    }
+
+    distZip.enabled = false
+    distTar.enabled = false
+
+    publishing {
+        publications {
+            bootJava(MavenPublication) {
+                artifact bootJar
+            }
+        }
+
+        repositories {
+            maven {
+                if (project.version.endsWith("-SNAPSHOT")) {
+                    url mavenSnapshots
+                } else {
+                    url mavenReleases
+                }
+
+                credentials {
+                    username = System.getenv("USERNAME")
+                    password = System.getenv("PASSWORD")
+                }
+            }
+        }
+    }
+
+    sonarqube {
+        properties {
+            property "sonar.host.url", System.getenv("SONAR_HOST_URL") ?: "http://localhost:9000/"
+            property "sonar.projectName", name
+            property "sonar.projectKey", name
+            property "sonar.sources", sourceSets.main
+            property "sonar.tests", sourceSets.test
+            property "sonar.java.binaries", "target/classes"
+            property "sonar.sonar.language", "java"
+            property "sonar.coverage.jacoco.xmlReportPaths", "build/reports/jacoco/test/jacocoTestReport.xml"
+            property "sonar.exclusions", "**/*.html"
+            property "sonar.cpd.exclusions", "**/*.html"
+
+        }
+    }
+
+    dependencyCheck {
+        cve {
+            urlModified="${vulnerabilityDb}/nist-data-mirror/nvdcve-1.1-modified.json.gz"
+            urlBase="${vulnerabilityDb}/nvdcve-1.1-%d.json.gz"
+        }
+        analyzers {
+            ossIndex {
+                enabled=false
+            }
+            retirejs {
+                retireJsUrl="${vulnerabilityDb}/jsrepository.json"
+            }
+        }
+    }
+
+}
